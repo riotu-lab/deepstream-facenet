@@ -65,8 +65,8 @@ batch-size=1
 
 # Model specific paths. These need to be updated for every classification model.
 tlt-model-key=tlt_encode
-tlt-encoded-model=/opt/nvidia/deepstream/deepstream-5.0/samples/models/tlt_pretrained_models/peoplenet/resnet34_peoplenet_pruned.etlt
-labelfile-path=/opt/nvidia/deepstream/deepstream-5.0/samples/models/tlt_pretrained_models/peoplenet/labels.txt
+tlt-encoded-model=models/tlt_peoplenet/resnet34_peoplenet_pruned.etlt
+labelfile-path=models/tlt_peoplenet/labels.txt
 num-detected-classes=3
 infer-dims=3;544;960
 uff-input-order=0
