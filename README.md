@@ -1,4 +1,8 @@
 # Deepstream Facenet
+This is demo is build on top of Python sample app [deepstream-test2](https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/tree/master/apps/deepstream-test2) 
+ - Replaced the PGIE with Peoplenet TLT model, and the SGIE1 with Facenet engine. 
+ - removed the other two sgies. 
+ - no changes regarding the tracker.
 
 ## Steps to run the demo:
 
