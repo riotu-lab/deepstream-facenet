@@ -14,3 +14,7 @@ This demo is built on top of Python sample app [deepstream-test2](https://github
   `python -m tf2onnx.convert --input facenet.pb --inputs input_1:0[1,160,160,3] --inputs-as-nchw input_1:0 --outputs Bottleneck_BatchNorm/batchnorm_1/add_1:0 --output facenet.onnx`
 - change the model-engine-file path to the your facenet engine file in `dstest2_sgie1_config.txt`.
 - `python3 deepstream_test_2.py <h264_elementary_stream_contains_faces`
+
+## Resources
+
+You can find more resources about our face recognition work and inference results at https://www.riotu-lab.org/face/
