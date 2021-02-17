@@ -1,6 +1,8 @@
 # Deepstream Facenet
 
-# DeepStream Installation
+Face Recognition on Jetson Nano using DeepStream and Python.
+
+## DeepStream Installation
 `install-deepstream.sh` will install DeepStream and its dependencies
 1. Download DeepStream using [this link](https://developer.nvidia.com/assets/Deepstream/5.0/ga/secure/deepstream_sdk_5.0.1_x86_64.tbz2)
 2. get Jetpack version 
@@ -18,14 +20,25 @@ export DEEPSTREAM_SDK_TAR_PATH=<path>
 - `t186` for Jetson TX2 series
 - `t194` for Jetson AGX Xavier series or Jetson Xavier NX
 - `t210` for Jetson Nano or Jetson TX1
+4. running installation script
+```
+chmod +x install-deepstream.sh
+sudo -E ./install-deepstream.sh
+```
+5. Making sure installation is fine by running a sample app
+```
+cd /opt/nvidia/deepsteream/deepstream-5.0/sources/deepstream_python_apps/apps/deepstream-test1
+python3 deepstream-test1.py /opt/nvidia/deepstream/deepstream-5.0/samples/streams/sample_720p.h264
+```
+take some time to compile the model and running the application for first time.
 
-
+## App
 This demo is built on top of Python sample app [deepstream-test2](https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/tree/master/apps/deepstream-test2) 
  - Replaced the PGIE with Peoplenet TLT model, and the SGIE1 with Facenet engine. 
  - removed the other two sgies. 
  - no changes regarding the tracker.
 
-## Steps to run the demo:
+### Steps to run the demo:
 
 - Generate the engine file for Facenet 
   - facenet_keras.h5 can be found in the models folder. The model is taken from [nyoki-mtl/keras-facenet](https://github.com/nyoki-mtl/keras-facenet)
