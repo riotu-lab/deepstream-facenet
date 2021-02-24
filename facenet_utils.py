@@ -2,6 +2,8 @@ from sklearn.preprocessing import Normalizer
 from PIL import Image
 import numpy as np
 
+KNN_CLASSIFIER_DICT = {"trained": False, "classifier": None}
+
 def load_dataset(dataset_path):
 	dataset_embeddings = np.load(dataset_path)
 	faces_embeddings, labels = dataset_embeddings['arr_0'], dataset_embeddings['arr_1']
