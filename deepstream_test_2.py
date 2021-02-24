@@ -21,31 +21,49 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 ################################################################################
+
 import sys
 sys.path.append('../')
-import platform
 import configparser
 
+import numpy as np
 import gi
 gi.require_version('Gst', '1.0')
 from gi.repository import GObject, Gst
 from common.is_aarch_64 import is_aarch64
 from common.bus_call import bus_call
+from common.FPS import GETFPS
+from facenet_utils import load_dataset, normalize_vectors, predict_using_classifier
 
+import ctypes
 import pyds
 
-PGIE_CLASS_ID_PERSON = 0
-PGIE_CLASS_ID_BAG = 1
-PGIE_CLASS_ID_FACE = 2
+fps_stream=None
+face_counter= []
+PGIE_CLASS_ID_VEHICLE = 0
+PGIE_CLASS_ID_PERSON = 2
+
+SGIE_CLASS_ID_LP = 1
+SGIE_CLASS_ID_FACE = 0
+
+pgie_classes = ["Vehicle", "TwoWheeler", "Person", "Roadsign"]
+
+PRIMARY_DETECTOR_UID = 1
+SECONDARY_DETECTOR_UID = 2
+DATASET_PATH = 'embeddings/psu_embeddings_nano_2.npz'
+
+faces_embeddings, labels = load_dataset(DATASET_PATH)
 
 def osd_sink_pad_buffer_probe(pad,info,u_data):
+    global fps_stream, face_counter
     frame_number=0
     #Intiallizing object counter with 0.
-    obj_counter = {
-        PGIE_CLASS_ID_PERSON:0,
-        PGIE_CLASS_ID_FACE:0,
-    }
+    vehicle_count = 0
+    person_count = 0
+    face_count = 0
+    lp_count = 0
     num_rects=0
+
     gst_buffer = info.get_buffer()
     if not gst_buffer:
         print("Unable to get GstBuffer ")
@@ -59,21 +77,16 @@ def osd_sink_pad_buffer_probe(pad,info,u_data):
     while l_frame is not None:
         try:
             # Note that l_frame.data needs a cast to pyds.NvDsFrameMeta
-            # The casting is done by pyds.NvDsFrameMeta.cast()
+            # The casting is done by pyds.glist_get_nvds_frame_meta()
             # The casting also keeps ownership of the underlying memory
             # in the C code, so the Python garbage collector will leave
             # it alone.
             frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
         except StopIteration:
             break
-        
 
         frame_number=frame_meta.frame_num
         num_rects = frame_meta.num_obj_meta
-
-
-        
-
         l_obj=frame_meta.obj_meta_list
         while l_obj is not None:
             try:
@@ -81,47 +94,23 @@ def osd_sink_pad_buffer_probe(pad,info,u_data):
                 obj_meta=pyds.NvDsObjectMeta.cast(l_obj.data)
             except StopIteration:
                 break
-            obj_counter[obj_meta.class_id] += 1
+            if obj_meta.unique_component_id == PRIMARY_DETECTOR_UID:
+                if obj_meta.class_id == PGIE_CLASS_ID_VEHICLE:
+                   vehicle_count += 1
+                if obj_meta.class_id == PGIE_CLASS_ID_PERSON:
+                   person_count += 1
 
-            l_user = obj_meta.obj_user_meta_list
-            # print(l_user)
-            while l_user is not None:
-                print('Inside l_user = obj_meta.obj_user_meta_list Loop')
-                try:
-                    # Casting l_obj.data to pyds.NvDsObjectMeta
-                    user_meta=pyds.NvDsUserMeta.cast(l_user.data)
-                except StopIteration:
-                    break
-
-                if (
-                    user_meta.base_meta.meta_type
-                    != pyds.NvDsMetaType.NVDSINFER_TENSOR_OUTPUT_META
-                ):
-                    continue
-
-                tensor_meta = pyds.NvDsInferTensorMeta.cast(user_meta.user_meta_data)
-
-                # Boxes in the tensor meta should be in network resolution which is
-                # found in tensor_meta.network_info. Use this info to scale boxes to
-                # the input frame resolution.
-                layers_info = []
-
-                for i in range(tensor_meta.num_output_layers):
-                    layer = pyds.get_nvds_LayerInfo(tensor_meta, i)
-                    layers_info.append(layer)
-                    print(f'Layer: {i}, Layer name: {layer.layerName}')
-
-                try:
-                    l_user = l_user.next
-                except StopIteration:
-                    break
-
+            if obj_meta.unique_component_id == SECONDARY_DETECTOR_UID:
+                if obj_meta.class_id == SGIE_CLASS_ID_FACE:
+                   face_count += 1
+                if obj_meta.class_id == SGIE_CLASS_ID_LP:
+                   lp_count += 1
+            
             try: 
                 l_obj=l_obj.next
             except StopIteration:
                 break
-
-        
+        fps_stream.get_fps()
         # Acquiring a display meta object. The memory ownership remains in
         # the C code so downstream plugins can still access it. Otherwise
         # the garbage collector will claim it when this probe function exits.
@@ -133,7 +122,8 @@ def osd_sink_pad_buffer_probe(pad,info,u_data):
         # memory will not be claimed by the garbage collector.
         # Reading the display_text field here will return the C address of the
         # allocated string. Use pyds.get_string() to get the string content.
-        py_nvosd_text_params.display_text = "Frame Number={} Number of Objects={} Person_count={} Face_count={}".format(frame_number, num_rects, obj_counter[PGIE_CLASS_ID_PERSON], obj_counter[PGIE_CLASS_ID_FACE])
+        py_nvosd_text_params.display_text = "Frame Number={} Number of Objects={}  Person_count={} Face Count={}".format(frame_number, num_rects, person_count, face_count)
+        face_counter.append(face_count)
 
         # Now set the offsets where the string should appear
         py_nvosd_text_params.x_offset = 10
@@ -156,19 +146,31 @@ def osd_sink_pad_buffer_probe(pad,info,u_data):
             l_frame=l_frame.next
         except StopIteration:
             break
+			
     return Gst.PadProbeReturn.OK	
 
 def sgie_sink_pad_buffer_probe(pad,info,u_data):
+    
+    frame_number=0
+    
+    num_rects=0
     gst_buffer = info.get_buffer()
     if not gst_buffer:
         print("Unable to get GstBuffer ")
         return
 
+    # Retrieve batch metadata from the gst_buffer
+    # Note that pyds.gst_buffer_get_nvds_batch_meta() expects the
+    # C address of gst_buffer as input, which is obtained with hash(gst_buffer)
     batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
     l_frame = batch_meta.frame_meta_list
     while l_frame is not None:
         try:
-            
+            # Note that l_frame.data needs a cast to pyds.NvDsFrameMeta
+            # The casting is done by pyds.NvDsFrameMeta.cast()
+            # The casting also keeps ownership of the underlying memory
+            # in the C code, so the Python garbage collector will leave
+            # it alone.
             frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
         except StopIteration:
             break
@@ -177,47 +179,73 @@ def sgie_sink_pad_buffer_probe(pad,info,u_data):
         num_rects = frame_meta.num_obj_meta
 
         l_obj=frame_meta.obj_meta_list
-        
         while l_obj is not None:
             try:
                 # Casting l_obj.data to pyds.NvDsObjectMeta
                 obj_meta=pyds.NvDsObjectMeta.cast(l_obj.data)
-               
             except StopIteration:
                 break
-
+            
             l_user = obj_meta.obj_user_meta_list
-            print(f'obj_meta.obj_user_meta_list {l_user}')
-            # while l_user is not None:
-            #     print('Inside l_user = obj_meta.obj_user_meta_list Loop')
-            #     try:
-            #         # Casting l_obj.data to pyds.NvDsObjectMeta
-            #         user_meta=pyds.NvDsUserMeta.cast(l_user.data)
-            #     except StopIteration:
-            #         break
+            # if obj_meta.class_id == SGIE_CLASS_ID_FACE:
+            #     print(f'obj_meta.obj_user_meta_list {l_user}')
+            while l_user is not None:
+               
+                try:
+                    # Casting l_user.data to pyds.NvDsUserMeta
+                    user_meta=pyds.NvDsUserMeta.cast(l_user.data)
+                except StopIteration:
+                    break
 
-            #     if (
-            #         user_meta.base_meta.meta_type
-            #         != pyds.NvDsMetaType.NVDSINFER_TENSOR_OUTPUT_META
-            #     ):
-            #         continue
+                if (
+                    user_meta.base_meta.meta_type
+                    != pyds.NvDsMetaType.NVDSINFER_TENSOR_OUTPUT_META
+                ):
+                    continue
+                
+                # Converting to tensor metadata
+                # Casting user_meta.user_meta_data to NvDsInferTensorMeta
+                tensor_meta = pyds.NvDsInferTensorMeta.cast(user_meta.user_meta_data)
+                
+                # Get output layer as NvDsInferLayerInfo 
+                layer = pyds.get_nvds_LayerInfo(tensor_meta, 0)
 
-            #     tensor_meta = pyds.NvDsInferTensorMeta.cast(user_meta.user_meta_data)
+                # Convert NvDsInferLayerInfo buffer to numpy array
+                ptr = ctypes.cast(pyds.get_ptr(layer.buffer), ctypes.POINTER(ctypes.c_float))
+                v = np.ctypeslib.as_array(ptr, shape=(128,))
+                
+                # Pridict face neme
+                yhat = v.reshape((1,-1))
+                face_to_predict_embedding = normalize_vectors(yhat)
+                result = predict_using_classifier(faces_embeddings, labels, face_to_predict_embedding)
+                result =  (str(result).title())
+                # print('Predicted name: %s' % result)
+                
+                # Generate classifer metadata and attach to obj_meta
+                
+                # Get NvDsClassifierMeta object 
+                classifier_meta = pyds.nvds_acquire_classifier_meta_from_pool(batch_meta)
 
-            #     # Boxes in the tensor meta should be in network resolution which is
-            #     # found in tensor_meta.network_info. Use this info to scale boxes to
-            #     # the input frame resolution.
-            #     layers_info = []
+                # Pobulate classifier_meta data with pridction result
+                classifier_meta.unique_component_id = tensor_meta.unique_id
+                
+                
+                label_info = pyds.nvds_acquire_label_info_meta_from_pool(batch_meta)
 
-            #     for i in range(tensor_meta.num_output_layers):
-            #         layer = pyds.get_nvds_LayerInfo(tensor_meta, i)
-            #         layers_info.append(layer)
-            #         print(f'Layer: {i}, Layer name: {layer.layerName}')
+                
+                label_info.result_prob = 0
+                label_info.result_class_id = 0
 
-            #     try:
-            #         l_user = l_user.next
-            #     except StopIteration:
-            #         break
+                pyds.nvds_add_label_info_meta_to_classifier(classifier_meta, label_info)
+                pyds.nvds_add_classifier_meta_to_object(obj_meta, classifier_meta)
+
+                display_text = pyds.get_string(obj_meta.text_params.display_text)
+                obj_meta.text_params.display_text = f'{display_text} {result}'
+
+                try:
+                    l_user = l_user.next
+                except StopIteration:
+                    break
 
             try: 
                 l_obj=l_obj.next
@@ -228,13 +256,14 @@ def sgie_sink_pad_buffer_probe(pad,info,u_data):
         except StopIteration:
             break
     return Gst.PadProbeReturn.OK
-
 def main(args):
+    global fps_stream
     # Check input arguments
     if len(args) != 2:
         sys.stderr.write("usage: %s <media file or uri>\n" % args[0])
         sys.exit(1)
-
+    fps_stream = GETFPS(0)
+    print(fps_stream)
     # Standard GStreamer initialization
     GObject.threads_init()
     Gst.init(None)
@@ -271,20 +300,22 @@ def main(args):
     if not streammux:
         sys.stderr.write(" Unable to create NvStreamMux \n")
 
-    # Use nvinfer to run inferencing on decoder's output,
-    # behaviour of inferencing is set through config file
-    pgie = Gst.ElementFactory.make("nvinfer", "primary-inference")
-    if not pgie:
-        sys.stderr.write(" Unable to create pgie \n")
-
+   
     tracker = Gst.ElementFactory.make("nvtracker", "tracker")
     if not tracker:
         sys.stderr.write(" Unable to create tracker \n")
 
-    sgie1 = Gst.ElementFactory.make("nvinfer", "secondary1-nvinference-engine")
-    if not sgie1:
-        sys.stderr.write(" Unable to make sgie1 \n")
+    # Use nvinfer to run inferencing on decoder's output,
+    # behaviour of inferencing is set through config file
+    face_detector = Gst.ElementFactory.make("nvinfer", "primary-inference face detector")
+    if not face_detector:
+        sys.stderr.write(" Unable to create face_detector \n")
 
+    face_classifier = Gst.ElementFactory.make("nvinfer", "secondary-inference face_classifier")
+    if not face_classifier:
+        sys.stderr.write(" Unable to create face_classifier \n")
+
+    # Use convertor to convert from NV12 to RGBA as required by nvosd
     nvvidconv = Gst.ElementFactory.make("nvvideoconvert", "convertor")
     if not nvvidconv:
         sys.stderr.write(" Unable to create nvvidconv \n")
@@ -310,10 +341,8 @@ def main(args):
     streammux.set_property('height', 1080)
     streammux.set_property('batch-size', 1)
     streammux.set_property('batched-push-timeout', 4000000)
-
-    #Set properties of pgie and sgie
-    pgie.set_property('config-file-path', "dstest2_pgie_config.txt")
-    sgie1.set_property('config-file-path', "dstest2_sgie1_config.txt")
+    face_detector.set_property('config-file-path', "detector_config.txt")
+    face_classifier.set_property('config-file-path', "classifier_config.txt")
 
     #Set properties of tracker
     config = configparser.ConfigParser()
@@ -340,14 +369,15 @@ def main(args):
             tracker_enable_batch_process = config.getint('tracker', key)
             tracker.set_property('enable_batch_process', tracker_enable_batch_process)
 
+
     print("Adding elements to Pipeline \n")
     pipeline.add(source)
     pipeline.add(h264parser)
     pipeline.add(decoder)
     pipeline.add(streammux)
-    pipeline.add(pgie)
     pipeline.add(tracker)
-    pipeline.add(sgie1)
+    pipeline.add(face_detector)
+    pipeline.add(face_classifier)
     pipeline.add(nvvidconv)
     pipeline.add(nvosd)
     pipeline.add(sink)
@@ -367,11 +397,13 @@ def main(args):
     srcpad = decoder.get_static_pad("src")
     if not srcpad:
         sys.stderr.write(" Unable to get source pad of decoder \n")
+
+        
     srcpad.link(sinkpad)
-    streammux.link(pgie)
-    pgie.link(tracker)
-    tracker.link(sgie1)
-    sgie1.link(nvvidconv)
+    streammux.link(face_detector)
+    face_detector.link(tracker)
+    tracker.link(face_classifier)
+    face_classifier.link(nvvidconv)
     nvvidconv.link(nvosd)
     if is_aarch64():
         nvosd.link(transform)
@@ -379,10 +411,8 @@ def main(args):
     else:
         nvosd.link(sink)
 
-
-    # create and event loop and feed gstreamer bus mesages to it
+    # create an event loop and feed gstreamer bus mesages to it
     loop = GObject.MainLoop()
-
     bus = pipeline.get_bus()
     bus.add_signal_watch()
     bus.connect ("message", bus_call, loop)
@@ -393,28 +423,22 @@ def main(args):
     osdsinkpad = nvosd.get_static_pad("sink")
     if not osdsinkpad:
         sys.stderr.write(" Unable to get sink pad of nvosd \n")
+
     osdsinkpad.add_probe(Gst.PadProbeType.BUFFER, osd_sink_pad_buffer_probe, 0)
 
-
-
-    # Lets add probe to get informed of the meta data generated, we add probe to
-    # the sink pad of the osd element, since by that time, the buffer would have
-    # had got all the metadata.
     vidconvsinkpad = nvvidconv.get_static_pad("sink")
     if not vidconvsinkpad:
-        sys.stderr.write(" Unable to get sink pad of nvosd \n")
+        sys.stderr.write(" Unable to get sink pad of nvvidconv \n")
+
     vidconvsinkpad.add_probe(Gst.PadProbeType.BUFFER, sgie_sink_pad_buffer_probe, 0)
 
-
+    # start play back and listen to events
     print("Starting pipeline \n")
-    
-    # start play back and listed to events
     pipeline.set_state(Gst.State.PLAYING)
     try:
-      loop.run()
+        loop.run()
     except:
-      pass
-
+        pass
     # cleanup
     pipeline.set_state(Gst.State.NULL)
 
