@@ -17,33 +17,87 @@ def normalize_vectors(vectors):
 	return vectors
 
 	
-def predict_using_classifier(faces_embedding, labels, face_to_predict_embedding):
-    class_probability = None
-    out_encoder, labels = labels_encoder(labels)
-    # print(labels)
-    face_to_predict_embedding = normalize_embeddings(
-        face_to_predict_embedding, normalization_technique='l2')
-    faces_embedding = normalize_embeddings(
-        faces_embedding, normalization_technique='l2')
+	
+def predict_using_classifier(faces_embeddings, labels, face_to_predict_embedding, threshold=45):
 
-    face_to_predict_embedding = face_to_predict_embedding[0]
+	classifier = get_classifier(faces_embeddings, labels, "knn")
 
-    # prediction for the face
-    samples = np.expand_dims(face_to_predict_embedding, axis=0)
-    # print(samples.shape)
-    # If error raised check using dataset embeddings and classifier data are the same, remove classifier files
-    yhat_class = classifier.predict(samples)
-    # print(yhat_class)
-    yhat_prob = classifier.predict_proba(samples)
-    # print(yhat_prob)
-    class_index = yhat_class[0]
-    #print('class_index: ',class_index)
-    class_probability = (yhat_prob[0, class_index] * 100)
-    # print('class_probability',class_probability)
-    predicted_name = out_encoder.inverse_transform(yhat_class)[0]
+	out_encoder, labels = labels_encoder(labels)
+	# print(labels)
+	face_to_predict_embedding = normalize_vectors(face_to_predict_embedding)
+	# faces_embedding = normalize_vectors(faces_embeddings)
 
-    # print("predicted_name ", predicted_name, " class_probability ", class_probability)
-    return predicted_name
+	face_to_predict_embedding = face_to_predict_embedding[0]
+
+	# prediction for the face
+	samples = np.expand_dims(face_to_predict_embedding, axis=0)
+	# print(samples.shape)
+	# If error raised check using dataset embeddings and classifier data are the same, remove classifier files
+	yhat_class = classifier.predict(samples)
+	# print(yhat_class)
+	yhat_prob = classifier.predict_proba(samples)
+	class_index = yhat_class[0]
+	class_probability = (yhat_prob[0, class_index] * 100)
+
+	#print('class_index: ',class_index)
+	# print('class_probability',class_probability)
+	
+	if class_probability >= threshold:
+		predicted_name = out_encoder.inverse_transform(yhat_class)[0]
+	else:
+		predicted_name = 'Unknown'
+
+	
+	# predicted_name += f' {class_probability}'
+
+	# print("predicted_name ", predicted_name, " class_probability ", class_probability)
+	return predicted_name, class_probability
+
+def get_classifier(faces_embeddings=None, labels=None, classifier_name='knn'):
+	'''
+			The method will load the classifier if it exist in the specified path
+			otherwise, it will train the classifier using faces_embeddings and labels
+	'''
+
+	if (KNN_CLASSIFIER_DICT["trained"] == False):
+		#print('[INFO] Training Classifier...')
+		classifier = train_classifier(faces_embeddings, labels, classifier_name=classifier_name)
+		KNN_CLASSIFIER_DICT["classifier"] = classifier
+		KNN_CLASSIFIER_DICT["trained"] = True
+		# print(CLASSIFIER_DICT[classifier_name]["trained"])
+	else:
+		#print('[INFO] Trained classifier assigned...')
+		classifier = KNN_CLASSIFIER_DICT["classifier"]
+
+	#print('[INFO] Classifier Training Done...')
+
+	return classifier
+
+def train_classifier(faces_embeddings, labels, classifier_name='knn'):
+	'''
+			The method will train the classifier. There are three classifiers:
+			- KNN
+			- SVM
+			- Neural Network
+	'''
+	# print('---------------',faces_embeddings.shape)
+	faces_embeddings = normalize_vectors(faces_embeddings)
+	out_encoder, labels = labels_encoder(labels)
+
+	if classifier_name == 'knn':
+		classifier = KNeighborsClassifier(n_neighbors=100, p=1, weights="distance", metric="euclidean")
+	else:
+		raise ValueError('Classifier name not found, classifier should be: knn, svm, neural_network')
+
+	# fit model
+	classifier.fit(faces_embeddings, labels)
+
+	# save the classifier to file
+	save_path = os.path.join(os.getcwd(), 'classifiers',
+							 '{}.sav'.format(classifier_name))
+	joblib.dump(classifier, save_path)
+	print('Classifier Saved to [%s]...' % save_path)
+	return classifier
 
 def extract_face_from_image(input_file_path, detector):
 	# load image from file
