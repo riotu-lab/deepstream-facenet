@@ -36,8 +36,12 @@ take some time to compile the model and running the application for first time.
 This demo is built on top of Python sample app [deepstream-test2](https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/tree/master/apps/deepstream-test2) 
  - Download [back-to-back-detectors](https://github.com/NVIDIA-AI-IOT/deepstream_reference_apps/tree/master/back-to-back-detectors) (the mode can detect faces). It is primary inference.
  - The secondary inference facenet engine. 
-  - Note: embedding dataset (npz file) should be generate by your dataset.
  - No changes regarding the tracker.
+ - Note: embedding dataset (npz file) should be generate by your dataset.
+ - Note: you should count avg mean and avg std for your dataset:
+    - Put avg mean in offsets parameter and in the net-scale-factor parameter put (1/avg std) in classifier_config.txt to make facenet model work efficient.
+ 
+
 
 ### Steps to run the demo:
 
