@@ -18,6 +18,13 @@ def normalize_vectors(vectors):
 
 	return vectors
 
+def labels_encoder(labels):
+	# label encode targets: one-hot encoding
+	# this is needed by machine learning classifiers
+	out_encoder = LabelEncoder()
+	out_encoder.fit(labels)
+	labels = out_encoder.transform(labels)
+	return out_encoder, labels
 	
 	
 def predict_using_classifier(faces_embeddings, labels, face_to_predict_embedding, threshold=45):
