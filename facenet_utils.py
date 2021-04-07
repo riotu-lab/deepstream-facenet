@@ -1,4 +1,5 @@
 from sklearn.preprocessing import Normalizer
+from sklearn.preprocessing import LabelEncoder
 from PIL import Image
 import numpy as np
 
